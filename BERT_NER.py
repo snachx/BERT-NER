@@ -11,14 +11,15 @@ from __future__ import print_function
 
 import collections
 import os
+import pickle
+
+import tensorflow as tf
 from bert import modeling
 from bert import optimization
 from bert import tokenization
-import tensorflow as tf
-from sklearn.metrics import f1_score,precision_score,recall_score
-from tensorflow.python.ops import math_ops
+
 import tf_metrics
-import pickle
+
 flags = tf.flags
 
 FLAGS = flags.FLAGS
@@ -49,7 +50,7 @@ flags.DEFINE_string(
 )
 
 flags.DEFINE_bool(
-    "do_lower_case", True,
+    "do_lower_case", False,
     "Whether to lower case the input text."
 )
 
@@ -66,7 +67,7 @@ flags.DEFINE_bool("use_tpu", False, "Whether to use TPU or GPU/CPU.")
 
 flags.DEFINE_bool("do_eval", False, "Whether to run eval on the dev set.")
 
-flags.DEFINE_bool("do_predict", False,"Whether to run the model in inference mode on the test set.")
+flags.DEFINE_bool("do_predict", False, "Whether to run the model in inference mode on the test set.")
 
 flags.DEFINE_integer("train_batch_size", 32, "Total batch size for training.")
 
@@ -77,8 +78,6 @@ flags.DEFINE_integer("predict_batch_size", 8, "Total batch size for predict.")
 flags.DEFINE_float("learning_rate", 5e-5, "The initial learning rate for Adam.")
 
 flags.DEFINE_float("num_train_epochs", 3.0, "Total number of training epochs to perform.")
-
-
 
 flags.DEFINE_float(
     "warmup_proportion", 0.1,
@@ -97,6 +96,7 @@ tf.flags.DEFINE_string("master", None, "[Optional] TensorFlow master URL.")
 flags.DEFINE_integer(
     "num_tpu_cores", 8,
     "Only used if `use_tpu` is True. Total number of TPU cores to use.")
+
 
 class InputExample(object):
     """A single training/test example for simple sequence classification."""
@@ -119,12 +119,12 @@ class InputExample(object):
 class InputFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, input_ids, input_mask, segment_ids, label_ids,):
+    def __init__(self, input_ids, input_mask, segment_ids, label_ids, ):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.label_ids = label_ids
-        #self.label_mask = label_mask
+        # self.label_mask = label_mask
 
 
 class DataProcessor(object):
@@ -153,10 +153,7 @@ class DataProcessor(object):
                 contends = line.strip()
                 word = line.strip().split(' ')[0]
                 label = line.strip().split(' ')[-1]
-                if contends.startswith("-DOCSTART-"):
-                    words.append('')
-                    continue
-                if len(contends) == 0 and words[-1] == '.':
+                if len(contends) == 0:
                     l = ' '.join([label for label in labels if len(label) > 0])
                     w = ' '.join([word for word in words if len(word) > 0])
                     lines.append([l, w])
@@ -179,13 +176,12 @@ class NerProcessor(DataProcessor):
             self._read_data(os.path.join(data_dir, "dev.txt")), "dev"
         )
 
-    def get_test_examples(self,data_dir):
+    def get_test_examples(self, data_dir):
         return self._create_example(
             self._read_data(os.path.join(data_dir, "test.txt")), "test")
 
-
     def get_labels(self):
-        return ["B-MISC", "I-MISC", "O", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC", "X","[CLS]","[SEP]"]
+        return ["[PAD]", "B-PER", "M-PER", "E-PER", "B-ROLE", "M-ROLE", "E-ROLE", "O", "X", "[CLS]"]
 
     def _create_example(self, lines, set_type):
         examples = []
@@ -197,21 +193,22 @@ class NerProcessor(DataProcessor):
         return examples
 
 
-def write_tokens(tokens,mode):
-    if mode=="test":
-        path = os.path.join(FLAGS.output_dir, "token_"+mode+".txt")
-        wf = open(path,'a')
+def write_tokens(tokens, mode):
+    if mode == "test":
+        path = os.path.join(FLAGS.output_dir, "token_" + mode + ".txt")
+        wf = open(path, 'a')
         for token in tokens:
-            if token!="**NULL**":
-                wf.write(token+'\n')
+            if token != "[PAD]":
+                wf.write(token + '\n')
         wf.close()
 
-def convert_single_example(ex_index, example, label_list, max_seq_length, tokenizer,mode):
+
+def convert_single_example(ex_index, example, label_list, max_seq_length, tokenizer, mode):
     label_map = {}
-    for (i, label) in enumerate(label_list,1):
+    for (i, label) in enumerate(label_list):
         label_map[label] = i
-    with open('./output/label2id.pkl','wb') as w:
-        pickle.dump(label_map,w)
+    with open('./output/label2id.pkl', 'wb') as w:
+        pickle.dump(label_map, w)
     textlist = example.text.split(' ')
     labellist = example.label.split(' ')
     tokens = []
@@ -225,42 +222,32 @@ def convert_single_example(ex_index, example, label_list, max_seq_length, tokeni
                 labels.append(label_1)
             else:
                 labels.append("X")
-    # tokens = tokenizer.tokenize(example.text)
     if len(tokens) >= max_seq_length - 1:
-        tokens = tokens[0:(max_seq_length - 2)]
-        labels = labels[0:(max_seq_length - 2)]
+        tokens = tokens[0:(max_seq_length - 1)]
+        labels = labels[0:(max_seq_length - 1)]
     ntokens = []
     segment_ids = []
     label_ids = []
     ntokens.append("[CLS]")
     segment_ids.append(0)
-    # append("O") or append("[CLS]") not sure!
     label_ids.append(label_map["[CLS]"])
     for i, token in enumerate(tokens):
         ntokens.append(token)
         segment_ids.append(0)
         label_ids.append(label_map[labels[i]])
-    ntokens.append("[SEP]")
-    segment_ids.append(0)
-    # append("O") or append("[SEP]") not sure!
-    label_ids.append(label_map["[SEP]"])
     input_ids = tokenizer.convert_tokens_to_ids(ntokens)
     input_mask = [1] * len(input_ids)
-    #label_mask = [1] * len(input_ids)
     while len(input_ids) < max_seq_length:
         input_ids.append(0)
         input_mask.append(0)
         segment_ids.append(0)
-        # we don't concerned about it!
         label_ids.append(0)
-        ntokens.append("**NULL**")
-        #label_mask.append(0)
-    # print(len(input_ids))
+        ntokens.append("[PAD]")
     assert len(input_ids) == max_seq_length
     assert len(input_mask) == max_seq_length
     assert len(segment_ids) == max_seq_length
     assert len(label_ids) == max_seq_length
-    #assert len(label_mask) == max_seq_length
+    assert len(ntokens) == max_seq_length
 
     if ex_index < 5:
         tf.logging.info("*** Example ***")
@@ -271,27 +258,25 @@ def convert_single_example(ex_index, example, label_list, max_seq_length, tokeni
         tf.logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
         tf.logging.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
         tf.logging.info("label_ids: %s" % " ".join([str(x) for x in label_ids]))
-        #tf.logging.info("label_mask: %s" % " ".join([str(x) for x in label_mask]))
 
     feature = InputFeatures(
         input_ids=input_ids,
         input_mask=input_mask,
         segment_ids=segment_ids,
         label_ids=label_ids,
-        #label_mask = label_mask
     )
-    write_tokens(ntokens,mode)
+    write_tokens(ntokens, mode)
     return feature
 
 
 def filed_based_convert_examples_to_features(
-        examples, label_list, max_seq_length, tokenizer, output_file,mode=None
+        examples, label_list, max_seq_length, tokenizer, output_file, mode=None
 ):
     writer = tf.python_io.TFRecordWriter(output_file)
     for (ex_index, example) in enumerate(examples):
         if ex_index % 5000 == 0:
             tf.logging.info("Writing example %d of %d" % (ex_index, len(examples)))
-        feature = convert_single_example(ex_index, example, label_list, max_seq_length, tokenizer,mode)
+        feature = convert_single_example(ex_index, example, label_list, max_seq_length, tokenizer, mode)
 
         def create_int_feature(values):
             f = tf.train.Feature(int64_list=tf.train.Int64List(value=list(values)))
@@ -302,7 +287,7 @@ def filed_based_convert_examples_to_features(
         features["input_mask"] = create_int_feature(feature.input_mask)
         features["segment_ids"] = create_int_feature(feature.segment_ids)
         features["label_ids"] = create_int_feature(feature.label_ids)
-        #features["label_mask"] = create_int_feature(feature.label_mask)
+        # features["label_mask"] = create_int_feature(feature.label_mask)
         tf_example = tf.train.Example(features=tf.train.Features(feature=features))
         writer.write(tf_example.SerializeToString())
 
@@ -314,7 +299,7 @@ def file_based_input_fn_builder(input_file, seq_length, is_training, drop_remain
         "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
         "label_ids": tf.FixedLenFeature([seq_length], tf.int64),
         # "label_ids":tf.VarLenFeature(tf.int64),
-        #"label_mask": tf.FixedLenFeature([seq_length], tf.int64),
+        # "label_mask": tf.FixedLenFeature([seq_length], tf.int64),
     }
 
     def _decode_record(record, name_to_features):
@@ -338,6 +323,7 @@ def file_based_input_fn_builder(input_file, seq_length, is_training, drop_remain
             drop_remainder=drop_remainder
         ))
         return d
+
     return input_fn
 
 
@@ -369,7 +355,7 @@ def create_model(bert_config, is_training, input_ids, input_mask,
         output_layer = tf.reshape(output_layer, [-1, hidden_size])
         logits = tf.matmul(output_layer, output_weight, transpose_b=True)
         logits = tf.nn.bias_add(logits, output_bias)
-        logits = tf.reshape(logits, [-1, FLAGS.max_seq_length, 13])
+        logits = tf.reshape(logits, [-1, FLAGS.max_seq_length, num_labels])
         # mask = tf.cast(input_mask,tf.float32)
         # loss = tf.contrib.seq2seq.sequence_loss(logits,labels,mask)
         # return (loss, logits, predict)
@@ -379,10 +365,11 @@ def create_model(bert_config, is_training, input_ids, input_mask,
         per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
         loss = tf.reduce_sum(per_example_loss)
         probabilities = tf.nn.softmax(logits, axis=-1)
-        predict = tf.argmax(probabilities,axis=-1)
-        return (loss, per_example_loss, logits,predict)
+        predict = tf.argmax(probabilities, axis=-1)
+        return (loss, per_example_loss, logits, predict)
         ##########################################################################
-        
+
+
 def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
                      use_one_hot_embeddings):
@@ -394,21 +381,23 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         input_mask = features["input_mask"]
         segment_ids = features["segment_ids"]
         label_ids = features["label_ids"]
-        #label_mask = features["label_mask"]
+        # label_mask = features["label_mask"]
         is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
-        (total_loss,  per_example_loss,logits,predicts) = create_model(
-            bert_config, is_training, input_ids, input_mask,segment_ids, label_ids,
+        (total_loss, per_example_loss, logits, predicts) = create_model(
+            bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
             num_labels, use_one_hot_embeddings)
         tvars = tf.trainable_variables()
         scaffold_fn = None
         if init_checkpoint:
-            (assignment_map, initialized_variable_names) = modeling.get_assignment_map_from_checkpoint(tvars,init_checkpoint)
+            (assignment_map, initialized_variable_names) = modeling.get_assignment_map_from_checkpoint(tvars,
+                                                                                                       init_checkpoint)
             tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
             if use_tpu:
                 def tpu_scaffold():
                     tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
                     return tf.train.Scaffold()
+
                 scaffold_fn = tpu_scaffold
             else:
                 tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
@@ -430,20 +419,22 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                 train_op=train_op,
                 scaffold_fn=scaffold_fn)
         elif mode == tf.estimator.ModeKeys.EVAL:
-            
+
             def metric_fn(per_example_loss, label_ids, logits):
-            # def metric_fn(label_ids, logits):
+                # def metric_fn(label_ids, logits):
                 predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
-                precision = tf_metrics.precision(label_ids,predictions,13,[1,2,4,5,6,7,8,9],average="macro")
-                recall = tf_metrics.recall(label_ids,predictions,13,[1,2,4,5,6,7,8,9],average="macro")
-                f = tf_metrics.f1(label_ids,predictions,13,[1,2,4,5,6,7,8,9],average="macro")
+                pos_indices = list(range(1, len(num_labels) - 3))
+                precision = tf_metrics.precision(label_ids, predictions, num_labels, pos_indices, average="macro")
+                recall = tf_metrics.recall(label_ids, predictions, num_labels, pos_indices, average="macro")
+                f = tf_metrics.f1(label_ids, predictions, num_labels, pos_indices, average="macro")
                 #
                 return {
-                    "eval_precision":precision,
-                    "eval_recall":recall,
+                    "eval_precision": precision,
+                    "eval_recall": recall,
                     "eval_f": f,
-                    #"eval_loss": loss,
+                    # "eval_loss": loss,
                 }
+
             eval_metrics = (metric_fn, [per_example_loss, label_ids, logits])
             # eval_metrics = (metric_fn, [label_ids, logits])
             output_spec = tf.contrib.tpu.TPUEstimatorSpec(
@@ -453,9 +444,10 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                 scaffold_fn=scaffold_fn)
         else:
             output_spec = tf.contrib.tpu.TPUEstimatorSpec(
-                mode = mode,predictions= predicts,scaffold_fn=scaffold_fn
+                mode=mode, predictions=predicts, scaffold_fn=scaffold_fn
             )
         return output_spec
+
     return model_fn
 
 
@@ -475,6 +467,7 @@ def main(_):
             "was only trained up to sequence length %d" %
             (FLAGS.max_seq_length, bert_config.max_position_embeddings))
 
+    tf.gfile.MakeDirs(FLAGS.output_dir)
     task_name = FLAGS.task_name.lower()
     if task_name not in processors:
         raise ValueError("Task not found: %s" % (task_name))
@@ -513,7 +506,7 @@ def main(_):
 
     model_fn = model_fn_builder(
         bert_config=bert_config,
-        num_labels=len(label_list)+1,
+        num_labels=len(label_list),
         init_checkpoint=FLAGS.init_checkpoint,
         learning_rate=FLAGS.learning_rate,
         num_train_steps=num_train_steps,
@@ -570,18 +563,18 @@ def main(_):
                 writer.write("%s = %s\n" % (key, str(result[key])))
     if FLAGS.do_predict:
         token_path = os.path.join(FLAGS.output_dir, "token_test.txt")
-        with open('./output/label2id.pkl','rb') as rf:
+        with open('./output/label2id.pkl', 'rb') as rf:
             label2id = pickle.load(rf)
-            id2label = {value:key for key,value in label2id.items()}
+            id2label = {value: key for key, value in label2id.items()}
         if os.path.exists(token_path):
             os.remove(token_path)
         predict_examples = processor.get_test_examples(FLAGS.data_dir)
 
         predict_file = os.path.join(FLAGS.output_dir, "predict.tf_record")
         filed_based_convert_examples_to_features(predict_examples, label_list,
-                                                FLAGS.max_seq_length, tokenizer,
-                                                predict_file,mode="test")
-                            
+                                                 FLAGS.max_seq_length, tokenizer,
+                                                 predict_file, mode="test")
+
         tf.logging.info("***** Running prediction*****")
         tf.logging.info("  Num examples = %d", len(predict_examples))
         tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
@@ -598,10 +591,11 @@ def main(_):
 
         result = estimator.predict(input_fn=predict_input_fn)
         output_predict_file = os.path.join(FLAGS.output_dir, "label_test.txt")
-        with open(output_predict_file,'w') as writer:
+        with open(output_predict_file, 'w') as writer:
             for prediction in result:
-                output_line = "\n".join(id2label[id] for id in prediction if id!=0) + "\n"
+                output_line = "\n".join(id2label[id] for id in prediction if id != 0) + "\n"
                 writer.write(output_line)
+
 
 if __name__ == "__main__":
     flags.mark_flag_as_required("data_dir")
@@ -610,5 +604,3 @@ if __name__ == "__main__":
     flags.mark_flag_as_required("bert_config_file")
     flags.mark_flag_as_required("output_dir")
     tf.app.run()
-
-
