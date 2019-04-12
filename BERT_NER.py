@@ -423,7 +423,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
             def metric_fn(per_example_loss, label_ids, logits):
                 # def metric_fn(label_ids, logits):
                 predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
-                pos_indices = list(range(1, len(num_labels) - 3))
+                pos_indices = list(range(1, num_labels - 3))
                 precision = tf_metrics.precision(label_ids, predictions, num_labels, pos_indices, average="macro")
                 recall = tf_metrics.recall(label_ids, predictions, num_labels, pos_indices, average="macro")
                 f = tf_metrics.f1(label_ids, predictions, num_labels, pos_indices, average="macro")
