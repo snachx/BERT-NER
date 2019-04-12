@@ -3,7 +3,7 @@ python BERT_NER.py   \
               --task_name="NER"  \
               --do_train=True   \
               --do_eval=True   \
-              --do_predict=True
+              --do_predict=True \
               --data_dir=NERdata   \
               --vocab_file=checkpoint/vocab.txt  \
               --bert_config_file=checkpoint/bert_config.json \
