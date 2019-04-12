@@ -194,7 +194,7 @@ class NerProcessor(DataProcessor):
 
 
 def write_tokens(tokens, label_list, label_ids, mode):
-    if mode == "test":
+    if mode == "test" and mode == 'eval':
         path = os.path.join(FLAGS.output_dir, "token_" + mode + ".txt")
         wf = open(path, 'a')
         for token, label_id in zip(tokens, label_ids):
@@ -422,6 +422,14 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
             def metric_fn(per_example_loss, label_ids, logits):
                 # def metric_fn(label_ids, logits):
                 predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
+                output_eval_file = os.path.join(FLAGS.output_dir, "label_eval.txt")
+                with open('./output/label2id.pkl', 'rb') as rf:
+                    label2id = pickle.load(rf)
+                    id2label = {value: key for key, value in label2id.items()}
+                with open(output_eval_file, 'w') as writer:
+                    for prediction in predictions:
+                        output_line = "\n".join(id2label[id] for id in prediction) + "\n"
+                        writer.write(output_line)
                 pos_indices = list(range(1, num_labels - 3))
                 precision = tf_metrics.precision(label_ids, predictions, num_labels, pos_indices, average="macro")
                 recall = tf_metrics.recall(label_ids, predictions, num_labels, pos_indices, average="macro")
@@ -536,6 +544,10 @@ def main(_):
             drop_remainder=True)
         estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
     if FLAGS.do_eval:
+        token_path = os.path.join(FLAGS.output_dir, "token_eval.txt")
+
+        if os.path.exists(token_path):
+            os.remove(token_path)
         eval_examples = processor.get_dev_examples(FLAGS.data_dir)
         eval_file = os.path.join(FLAGS.output_dir, "eval.tf_record")
         filed_based_convert_examples_to_features(
