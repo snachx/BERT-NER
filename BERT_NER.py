@@ -193,13 +193,12 @@ class NerProcessor(DataProcessor):
         return examples
 
 
-def write_tokens(tokens, mode):
+def write_tokens(tokens, label_list, label_ids, mode):
     if mode == "test":
         path = os.path.join(FLAGS.output_dir, "token_" + mode + ".txt")
         wf = open(path, 'a')
-        for token in tokens:
-            if token != "[PAD]":
-                wf.write(token + '\n')
+        for token, label_id in zip(tokens, label_ids):
+            wf.write('%s %s\n' % (token, label_list[label_id]))
         wf.close()
 
 
@@ -265,7 +264,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length, tokeni
         segment_ids=segment_ids,
         label_ids=label_ids,
     )
-    write_tokens(ntokens, mode)
+    write_tokens(ntokens, label_list, label_ids, mode)
     return feature
 
 
@@ -593,7 +592,7 @@ def main(_):
         output_predict_file = os.path.join(FLAGS.output_dir, "label_test.txt")
         with open(output_predict_file, 'w') as writer:
             for prediction in result:
-                output_line = "\n".join(id2label[id] for id in prediction if id != 0) + "\n"
+                output_line = "\n".join(id2label[id] for id in prediction) + "\n"
                 writer.write(output_line)
 
 
